@@ -128,7 +128,10 @@ fn pattern(stop: Arc<AtomicBool>, mut emit: impl FnMut(VideoFrame) -> Result<()>
     let mut seq = 0;
     while !stop.load(Ordering::Relaxed) {
         let started = Instant::now();
-        emit(test_frame(seq, &mut encoder)?)?;
+        let frame = test_frame(seq, &mut encoder)?;
+        if !frame.data.is_empty() {
+            emit(frame)?;
+        }
         seq += 1;
         thread::sleep(Duration::from_millis(33).saturating_sub(started.elapsed()));
     }
@@ -171,7 +174,10 @@ fn windows_capture(
                         ]);
                     }
                 }
-                emit(encode_rgb(&mut encoder, &rgb, w, h, seq)?)?;
+                let frame = encode_rgb(&mut encoder, &rgb, w, h, seq)?;
+                if !frame.data.is_empty() {
+                    emit(frame)?;
+                }
                 seq += 1;
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}

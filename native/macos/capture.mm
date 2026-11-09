@@ -84,10 +84,16 @@ static CGDirectDisplayID createVirtualDisplay(void) {
         CGRect main = CGDisplayBounds(CGMainDisplayID());
         CGError mirror = CGConfigureDisplayMirrorOfDisplay(config, display, kCGNullDirectDisplay);
         CGError origin = CGConfigureDisplayOrigin(config, display, (int32_t)CGRectGetMaxX(main), (int32_t)main.origin.y);
-        if (mirror == kCGErrorSuccess && origin == kCGErrorSuccess)
-            CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
-        else CGCancelDisplayConfiguration(config);
-    }
+        if (mirror == kCGErrorSuccess && origin == kCGErrorSuccess) {
+            if (CGCompleteDisplayConfiguration(config, kCGConfigureForSession) != kCGErrorSuccess)
+                fail(@"macOS refused the independent desktop layout.");
+        } else {
+            CGCancelDisplayConfiguration(config);
+            fail(@"Could not detach the virtual display from mirroring.");
+        }
+    } else fail(@"Could not begin the independent display configuration.");
+    if (CGDisplayMirrorsDisplay(display) != kCGNullDirectDisplay)
+        fail(@"The requested independent display is still mirrored; extension was not started.");
     return display;
 }
 

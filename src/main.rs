@@ -339,7 +339,8 @@ impl eframe::App for LinkDesk {
                         }
                     }
                 });
-                if let Some((fingerprint, decision)) = &self.certificate {
+                let mut certificate_choice = None;
+                if let Some((fingerprint, _decision)) = &self.certificate {
                     ui.add_space(8.);
                     ui.group(|ui| {
                         ui.label("Compare this fingerprint with the host");
@@ -347,12 +348,17 @@ impl eframe::App for LinkDesk {
                             egui::Label::new(egui::RichText::new(fingerprint).monospace()).wrap(),
                         );
                         if ui.button("Fingerprint matches · pair").clicked() {
-                            let _ = decision.try_send(true);
+                            certificate_choice = Some(true);
                         }
                         if ui.button("Cancel pairing").clicked() {
-                            let _ = decision.try_send(false);
+                            certificate_choice = Some(false);
                         }
                     });
+                }
+                if let Some(choice) = certificate_choice {
+                    if let Some((_, decision)) = self.certificate.take() {
+                        let _ = decision.try_send(choice);
+                    }
                 }
                 ui.add_space(16.);
                 if (self.host.is_some() || self.receiver.is_some())

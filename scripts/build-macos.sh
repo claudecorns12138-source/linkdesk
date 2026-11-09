@@ -12,6 +12,7 @@ xcrun clang++ -std=c++17 -fobjc-arc -O2 -mmacosx-version-min=14.4 -ffile-prefix-
   native/macos/capture.mm -o "$app/MacOS/linkdesk-mac-helper"
 cp target/release/linkdesk "$app/MacOS/linkdesk"
 cp native/macos/Info.plist "$app/Info.plist"
+cp LICENSE THIRD_PARTY_NOTICES.md "$app/Resources/"
 codesign --force --sign - "$app/MacOS/linkdesk-mac-helper"
 codesign --force --deep --sign - dist/LinkDesk.app
 printf 'Built dist/LinkDesk.app (ad-hoc signed development build).\n'

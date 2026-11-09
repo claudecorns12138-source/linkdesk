@@ -18,9 +18,13 @@ $researchCompiler = Get-Command g++ -ErrorAction SilentlyContinue
 if ($null -ne $researchCompiler) {
     foreach ($researchRuntime in @('libstdc++-6.dll', 'libgcc_s_seh-1.dll', 'libwinpthread-1.dll')) {
         $researchRuntimePath = & $researchCompiler.Source "-print-file-name=$researchRuntime"
+        if (-not (Test-Path -LiteralPath $researchRuntimePath -PathType Leaf)) {
+            $researchRuntimePath = Join-Path (Split-Path -Parent $researchCompiler.Source) $researchRuntime
+        }
         if (Test-Path -LiteralPath $researchRuntimePath -PathType Leaf) {
             Copy-Item -LiteralPath $researchRuntimePath -Destination '.\dist\windows'
         }
     }
 }
+Copy-Item -LiteralPath '.\LICENSE', '.\THIRD_PARTY_NOTICES.md', '.\README.md' -Destination '.\dist\windows'
 Write-Output 'Built dist/windows/linkdesk.exe'
