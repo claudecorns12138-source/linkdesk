@@ -18,6 +18,10 @@ Native desktop applications, not a browser viewer or a WebView. Written in Rust,
 - 显示实际解码帧率和视频码率；F11 / Esc 全屏切换。帧率不等于端到端延迟。
 - 原生 WGPU 渲染，保留 OpenGL 启动回退；本机诊断可断开后重新运行，始终只发送合成画面。
 
+![LinkDesk Alpha 2 native Windows receiver](docs/images/native-receiver-alpha2.png)
+
+Windows 原生调试窗口的实际截图：合成画面经过 H.264 编码、TLS 本机传输、解码和显示。这张截图不代表 Mac 实机扩展或端到端延迟已完成验收。
+
 ## Current scope
 
 | Capability | Status |

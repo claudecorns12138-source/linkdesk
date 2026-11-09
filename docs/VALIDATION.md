@@ -9,8 +9,8 @@ Record outcomes, not personal device identifiers. Do not paste raw screenshots o
 | Native rendered video | Alpha 2 Windows native WGPU debug window visually verified with actual H.264 → TLS → decode → texture playback. Moving generated video filled the screen; F11 / Esc returned to the Chinese windowed interface. Debug synthetic frame rate is not a latency measurement |
 | Diagnostic recovery | Disconnect → restart diagnostic restored video. Selecting Share during `--demo` showed an explicit exit action; the diagnostic host remains synthetic, loopback-only and unadvertised |
 | macOS helper compilation | macOS CI passed compilation, tests and development app/helper bundle build; no physical display validation |
-| Last published CI evidence | Alpha 1: Windows, macOS and Linux passed format, strict lint, 8 tests, privacy scan and release build at `f89d1ea`: [run](https://github.com/claudecorns12138-source/linkdesk/actions/runs/42554138088). Alpha 2 cross-platform results will be recorded after its run completes |
-| Published development packages | [Releases](https://github.com/claudecorns12138-source/linkdesk/releases); archive text and binary paths are inspected before publication; SHA-256 manifests included |
+| Alpha 2 code CI | Windows, macOS and Linux passed format, strict lint, 15 tests, privacy scan and release build at `e11a185`: [run](https://github.com/claudecorns12138-source/linkdesk/actions/runs/42574568193) |
+| Published development packages | [v0.1.0-alpha.2](https://github.com/claudecorns12138-source/linkdesk/releases/tag/v0.1.0-alpha.2), built from `e11a185`; Windows x64 PE and both Mac ARM64 Mach-O executables checked. Archive text and personal binary paths inspected; uploaded asset digests matched the local SHA-256 manifest. Downloaded release binaries have not been manually launched |
 | Physical Mac independent extension | Not tested |
 | Physical Mac → Windows on wired / Wi-Fi LAN | Not tested |
 | Existing Sidecar + LinkDesk concurrently | Not tested |
