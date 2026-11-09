@@ -10,6 +10,7 @@ This is a development prototype for devices on a trusted local network. It is no
 - Runtime IPs, pairing codes and fingerprints belong in the local application only. Avoid screenshots of pairing details or private desktops in public issues.
 - Private research notes stay outside this repository. Build output, logs, environment files and key/certificate files are ignored. Run the privacy check before every public push.
 - The Mac helper uses a private virtual-display interface. It is not a kernel driver or an Apple-supported extension API. Do not ship it as stable without OS and hardware validation.
+- Alpha 3 plans a free shared edge and configures only its newly owned virtual display. Existing display state is snapshotted before creation and compared after creation/configuration. A mismatch aborts the extension without trying to repair/reconfigure other screens or Sidecar. This guard does not guarantee absence of transient WindowServer effects; physical coexistence testing is still required. Display topology is held locally in memory and is not sent to receivers.
 - Capture/codec threads and socket handshakes are bounded. The protocol rejects oversized records; input from an approved peer is still untrusted. Decoder hardening and fuzzing remain future work.
 - Control-record sizes are rejected before allocating/reading their bodies. Discovery queues and displayed host counts are bounded; discovery labels cannot contain control characters.
 

@@ -1,4 +1,5 @@
 use crate::{
+    desktop::{ExtensionOptions, LiveLayout},
     discovery, identity,
     protocol::{self, Hello, VideoFrame, Welcome},
     source::{self, Mode, SourceControl},
@@ -41,6 +42,7 @@ pub enum Event {
         error: Option<String>,
     },
     SourceError(String),
+    DesktopReady(LiveLayout),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +169,15 @@ fn new_pin() -> (String, Instant) {
 }
 
 pub fn start_host(bind: &str, mode: Mode, events: mpsc::Sender<Event>) -> Result<Host> {
+    start_host_with_layout(bind, mode, ExtensionOptions::default(), events)
+}
+
+pub fn start_host_with_layout(
+    bind: &str,
+    mode: Mode,
+    options: ExtensionOptions,
+    events: mpsc::Sender<Event>,
+) -> Result<Host> {
     let listener = TcpListener::bind(bind)
         .context("cannot listen; is another LinkDesk host already running?")?;
     listener.set_nonblocking(true)?;
@@ -196,11 +207,20 @@ pub fn start_host(bind: &str, mode: Mode, events: mpsc::Sender<Event>) -> Result
         let events = events.clone();
         let control = control.clone();
         thread::spawn(move || {
-            let result = source::run(mode, stop.clone(), control.clone(), |f| {
-                frames.fetch_add(1, Ordering::Relaxed);
-                hub.lock().unwrap().publish(f);
-                Ok(())
-            });
+            let result = source::run_with_layout(
+                mode,
+                options,
+                stop.clone(),
+                control.clone(),
+                |layout| {
+                    let _ = events.send(Event::DesktopReady(layout));
+                },
+                |f| {
+                    frames.fetch_add(1, Ordering::Relaxed);
+                    hub.lock().unwrap().publish(f);
+                    Ok(())
+                },
+            );
             control.stop();
             if !stop.load(Ordering::Relaxed) {
                 if let Err(e) = result {

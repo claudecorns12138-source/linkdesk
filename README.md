@@ -8,7 +8,18 @@ Native desktop applications, not a browser viewer or a WebView. Written in Rust,
 
 **Development downloads:** [macOS and Windows alpha packages](https://github.com/claudecorns12138-source/linkdesk/releases). These are native applications built in CI, not browser clients. Follow the pairing instructions below; real Mac extension and Sidecar coexistence remain unverified.
 
-## Alpha 2 的改进
+## Alpha 3：保留随航，直接跨屏拖动
+
+Mac、随航 iPad、LinkDesk Windows 组成同一个 Mac 桌面。目标是把 iPad 上的 Mac 窗口直接拖到 Windows 那块屏，再拖回来。
+
+- 新增相邻屏幕与上下左右位置选择，原生排列预览标出可穿过的公共边缘。
+- 自动规划优先贴着已有独立扩展屏；避开重叠区域，不再简单按主屏高度放到最右侧。
+- 创建前后核对现有屏幕位置、逻辑／像素分辨率、刷新率、旋转、主屏和镜像状态。只配置自有虚拟屏；发生变化时中止本次扩展。
+- 不断开或重配 iPad 随航；真实 Mac 上的无干扰与双向拖动仍需实机验收。
+
+操作与验收步骤见 [保留随航的三屏 Mac 桌面](docs/CONTINUOUS_DESKTOP.zh-CN.md)。
+
+### Alpha 2 的改进
 
 - 中文原生界面：接收屏幕、共享本机分开，提供配对引导和可收起的错误详情。
 - 连接失败或主机断开后可直接重试；旧会话的消息和画面不会覆盖新会话。
@@ -74,13 +85,13 @@ Install the X11/Wayland/graphics development packages and a CJK system font such
 
 ## Mac → Windows extended desktop
 
-1. 保留现有 iPad 随航。Mac 打开 **LinkDesk.app → 共享本机 → 扩展桌面 → 开始共享**。
+1. 保留现有 iPad 随航。Mac 打开 **LinkDesk.app → 共享本机 → 扩展桌面**，刷新屏幕排列，选择对应 iPad 的 **相邻屏幕**与空闲的一侧，再 **开始共享**。
 2. 如系统请求权限，请自行允许屏幕录制／本地网络。授权后仍不能采集时，退出应用再打开。
 3. Windows 选择 **接收屏幕**，选中发现的主机，或手动填写 Mac 地址。地址可省略默认端口，也支持 IPv6 和主机名。
 4. Mac 展开 **显示配对信息**，可复制地址、查看／刷新配对码。Windows 输入六位配对码并点 **连接主机**。
 5. 首次连接，对照 Mac 的 **身份指纹**；确认一致后，Windows 点 **指纹一致，继续配对**，Mac 点 **允许连接**。同次应用运行中，相同指纹不再重复核对；主机确认仍保留。
 6. Windows 点 **进入全屏** 或按 **F11**。Mac 到系统 **显示器**设置检查新增屏幕排列，再把一个窗口拖过去。仍使用 Mac 的键鼠操作；按 **Esc** 退出接收端全屏。
-7. 检查 Mac、iPad 和 Windows 能否同时显示不同的 Mac 窗口。实机兼容性与随航并用仍待验收。
+7. 沿排列图中的亮线，把随航 iPad 上的 Mac 窗口直接拖到 Windows 屏，再反向拖回。检查三块屏同时显示不同的 Mac 窗口。实机兼容性与随航并用仍待验收。
 
 Stopping the Mac host terminates the helper and releases its virtual display. Move valuable work back to the main screen before experimenting with display removal. Capture is currently limited to a maximum 1080p, without automatic resolution negotiation or persisted device trust.
 

@@ -19,6 +19,8 @@ Extension means the host OS creates a separately addressable display. The macOS 
 
 The private interface is isolated in `native/macos/capture.mm`; failure is reported rather than falling back silently to mirroring. Its experimental status must remain visible. ScreenCaptureKit and VideoToolbox are public capture/encoding frameworks. macOS and Sidecar compatibility requires hardware testing.
 
+`desktop.rs` plans only the new display's rectangle, requiring at least a 64-unit shared edge with a selected active, independent display and no overlap with existing independent displays. Automatic selection prefers an existing extension such as Sidecar. The native helper revalidates the plan against a fresh topology before creation. `layout_guard.h` checks the existing screens' origins, logical/pixel modes, refresh, rotation, main/active and mirror states after creation and after the session-only configuration transaction. Only the newly created display ID is configured. A mismatch aborts the helper; no Sidecar restart, repair or global rearrangement is attempted. A successful local ready event supplies the startup topology to the native UI; that metadata is not carried over the LAN. Physical no-interference and direct window dragging remain acceptance requirements.
+
 Windows extension needs a separate user-mode indirect display driver. There is no pretend adapter or `Win+P` shortcut in the application. Linux Wayland extension depends on compositor support; neither virtual-display nor capture adapters exist yet.
 
 ## Transport and pairing

@@ -1,3 +1,4 @@
+pub mod desktop;
 pub mod discovery;
 pub mod identity;
 pub mod network;

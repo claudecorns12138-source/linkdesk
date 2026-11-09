@@ -1,4 +1,5 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+mod layout_ui;
 mod ui;
 
 fn options(renderer: eframe::Renderer) -> eframe::NativeOptions {

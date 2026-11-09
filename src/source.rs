@@ -1,4 +1,7 @@
-use crate::protocol::{self, VideoFrame};
+use crate::{
+    desktop::{ExtensionOptions, LiveLayout},
+    protocol::{self, VideoFrame},
+};
 #[cfg(any(windows, target_os = "macos"))]
 use anyhow::Context;
 use anyhow::{bail, Result};
@@ -59,16 +62,34 @@ pub fn run(
     control: Arc<SourceControl>,
     emit: impl FnMut(VideoFrame) -> Result<()>,
 ) -> Result<()> {
+    run_with_layout(
+        mode,
+        ExtensionOptions::default(),
+        stop,
+        control,
+        |_| {},
+        emit,
+    )
+}
+
+pub fn run_with_layout(
+    mode: Mode,
+    options: ExtensionOptions,
+    stop: Arc<AtomicBool>,
+    control: Arc<SourceControl>,
+    ready: impl FnMut(LiveLayout),
+    emit: impl FnMut(VideoFrame) -> Result<()>,
+) -> Result<()> {
     if mode == Mode::Test {
         return pattern(stop, emit);
     }
     #[cfg(target_os = "macos")]
     {
-        mac_capture(mode, stop, control, emit)
+        mac_capture(mode, options, stop, control, ready, emit)
     }
     #[cfg(windows)]
     {
-        let _ = control;
+        let _ = (control, options, ready);
         if mode == Mode::Extend {
             bail!("Windows extended-display driver is not implemented yet. Use this PC as a receiver, or choose Mirror.")
         }
@@ -76,7 +97,7 @@ pub fn run(
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = (stop, control, emit);
+        let _ = (stop, control, emit, options, ready);
         bail!("Native capture is not implemented for this platform yet; receiver and connection test are available")
     }
 }
@@ -191,27 +212,52 @@ fn windows_capture(
 #[cfg(target_os = "macos")]
 fn mac_capture(
     mode: Mode,
+    options: ExtensionOptions,
     stop: Arc<AtomicBool>,
     control: Arc<SourceControl>,
+    mut ready: impl FnMut(LiveLayout),
     mut emit: impl FnMut(VideoFrame) -> Result<()>,
 ) -> Result<()> {
-    let exe = std::env::current_exe()?;
-    let helper = exe
-        .parent()
-        .context("missing executable folder")?
-        .join("linkdesk-mac-helper");
-    let mut child = Command::new(helper)
-        .arg(if mode == Mode::Extend {
-            "extend"
-        } else {
-            "mirror"
-        })
+    let planned = if mode == Mode::Extend {
+        Some(crate::desktop::plan(
+            &crate::desktop::read_displays()?,
+            options,
+        )?)
+    } else {
+        None
+    };
+    let mut command = Command::new(crate::desktop::helper_path()?);
+    if let Some(p) = planned {
+        command
+            .arg("extend")
+            .arg("--anchor")
+            .arg(p.anchor_id.to_string())
+            .arg("--side")
+            .arg(p.side.argument())
+            .arg("--x")
+            .arg(p.rect.x.to_string())
+            .arg("--y")
+            .arg(p.rect.y.to_string());
+    } else {
+        command.arg("mirror");
+    }
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .context("Mac helper missing; run scripts/build-macos.sh")?;
     let mut stdout = child.stdout.take().context("missing helper output")?;
-    *control.child.lock().unwrap() = Some(child);
+    {
+        let mut registered = control.child.lock().unwrap();
+        // Stopping a host while its read-only topology probe runs must never
+        // leave a late-started helper and virtual display behind.
+        if stop.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+        *registered = Some(child);
+    }
     let mut seq = 0;
     while !stop.load(Ordering::Relaxed) {
         let (kind, data) = protocol::read_record(&mut stdout)?;
@@ -220,6 +266,19 @@ fn mac_capture(
                 let v: serde_json::Value = serde_json::from_slice(&data)?;
                 if let Some(error) = v.get("error").and_then(|v| v.as_str()) {
                     bail!("Mac capture: {error}")
+                }
+                if let Some(planned) = planned {
+                    let layout: LiveLayout = serde_json::from_value(v["layout"].clone())
+                        .context("Mac helper did not confirm preservation of existing displays")?;
+                    anyhow::ensure!(
+                        layout.existing_preserved
+                            && layout.placement == planned
+                            && layout.display_id != 0
+                            && layout.existing.iter().all(|d| d.id != layout.display_id),
+                        "Mac helper did not confirm the requested independent layout"
+                    );
+                    crate::desktop::validate_placement(&layout.existing, layout.placement)?;
+                    ready(layout);
                 }
             }
             protocol::VIDEO => {

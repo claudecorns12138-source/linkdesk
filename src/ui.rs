@@ -48,6 +48,8 @@ struct Notice {
 }
 
 pub struct LinkDesk {
+    desktop: crate::layout_ui::LayoutControls,
+    layout_preview: bool,
     role: Role,
     mode: Mode,
     host: Option<Host>,
@@ -94,6 +96,8 @@ impl LinkDesk {
         let discovery_error = discovery::listen(tx, discovery_stop.clone()).is_err();
         let now = Instant::now();
         let mut app = Self {
+            desktop: crate::layout_ui::LayoutControls::default(),
+            layout_preview: std::env::args().any(|a| a == "--layout-preview"),
             role: if cfg!(target_os = "macos") {
                 Role::Share
             } else {
@@ -137,9 +141,13 @@ impl LinkDesk {
             fullscreen_since: now,
             last_pointer: None,
             last_pointer_move: now,
-            demo: std::env::args().any(|a| a == "--demo"),
+            demo: std::env::args().any(|a| a == "--demo" || a == "--layout-preview"),
         };
-        if app.demo {
+        if app.layout_preview {
+            app.desktop = crate::layout_ui::LayoutControls::preview();
+            app.role = Role::Share;
+            app.mode = Mode::Test;
+        } else if app.demo {
             app.start_demo();
         }
         app
@@ -155,7 +163,7 @@ impl LinkDesk {
             (bind, self.mode)
         };
         let (tx, events) = mpsc::channel();
-        match network::start_host(bind, mode, tx) {
+        match network::start_host_with_layout(bind, mode, self.desktop.options(), tx) {
             Ok(host) => {
                 self.addresses = if host.address.ip().is_loopback() {
                     vec![host.address.to_string()]
@@ -192,6 +200,8 @@ impl LinkDesk {
         self.stop_receiver();
         self.stop_host();
         self.demo = false;
+        self.layout_preview = false;
+        self.desktop = crate::layout_ui::LayoutControls::default();
         self.mode = if cfg!(target_os = "macos") {
             Mode::Extend
         } else {
@@ -255,6 +265,7 @@ impl LinkDesk {
         self.frame_size = [0, 0];
     }
     fn stop_host(&mut self) {
+        self.desktop.clear_live();
         self.host_events = None;
         self.host = None;
         self.requests.clear();
@@ -273,6 +284,7 @@ impl LinkDesk {
     fn poll(&mut self, ctx: &egui::Context) {
         while let Some(event) = self.host_events.as_ref().and_then(|rx| rx.try_recv().ok()) {
             match event {
+                Event::DesktopReady(layout) => self.desktop.ready(layout),
                 Event::PairRequest { id, name, decision } => {
                     if self.demo {
                         let _ = decision.try_send(true);
@@ -298,7 +310,7 @@ impl LinkDesk {
                     self.notice = Some(Notice {
                         title: "共享未能启动".into(),
                         hint: if cfg!(target_os = "macos") {
-                            "请检查屏幕录制权限，并确认应用包内含采集组件；授权后可退出应用再打开。"
+                            "请检查屏幕录制权限和屏幕排列，尝试刷新后更换空闲边缘。若现有屏幕状态变化，本次扩展会停止。"
                         } else {
                             "请检查显卡驱动、显示器和当前桌面是否可用。"
                         }
@@ -428,7 +440,7 @@ impl LinkDesk {
                         .size(12.),
                 );
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.label(RichText::new("0.1.0 Alpha 2").color(MUTED).size(11.));
+                    ui.label(RichText::new("0.1.0 Alpha 3").color(MUTED).size(11.));
                     ui.label(
                         RichText::new("Mac 扩展屏仍为实验功能")
                             .color(MUTED)
@@ -774,12 +786,25 @@ impl LinkDesk {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(BG).inner_margin(30))
                 .show(ctx, |ui| {
-                    ui.heading("正在进行本机连接诊断");
-                    ui.label("诊断仅使用合成画面，不采集桌面、不向局域网开放。");
-                    ui.add_space(20.);
-                    if ui.button("退出诊断，设置共享").clicked() {
-                        self.end_demo();
-                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.heading(if self.layout_preview {
+                            "屏幕排列预览"
+                        } else {
+                            "正在进行本机连接诊断"
+                        });
+                        ui.label(if self.layout_preview {
+                            "仅演示布局，不读取真实屏幕、不采集桌面、不向局域网开放。"
+                        } else {
+                            "诊断仅使用合成画面，不采集桌面、不向局域网开放。"
+                        });
+                        if self.layout_preview {
+                            self.desktop.show_setup(ui, ctx);
+                        }
+                        ui.add_space(20.);
+                        if ui.button("退出诊断，设置共享").clicked() {
+                            self.end_demo();
+                        }
+                    });
                 });
             return;
         }
@@ -792,13 +817,15 @@ impl LinkDesk {
                         if cfg!(target_os="macos"){mode(ui,&mut self.mode,Mode::Extend,"扩展桌面","新增独立显示器，窗口可拖过去。Mac 实验功能。");}
                         if cfg!(any(windows,target_os="macos")){mode(ui,&mut self.mode,Mode::Mirror,"镜像主屏幕","在另一台设备上显示相同的桌面内容。");}
                         mode(ui,&mut self.mode,Mode::Test,"连接诊断","发送合成画面，先验证网络，不分享真实桌面。");
+                        if cfg!(target_os="macos")&&self.mode==Mode::Extend {self.desktop.show_setup(ui,ctx);}
                         ui.add_space(12.);if primary(ui,"开始共享",self.receiver.is_none()).clicked(){self.start_host(&format!("0.0.0.0:{}",protocol::PORT));}
                         if !cfg!(target_os="macos"){ui.label(RichText::new(if cfg!(windows){"Windows 主机的独立扩展屏驱动仍在开发；当前可作为接收端。"}else{"Linux 采集与虚拟显示器尚未实现；当前可接收画面或发送连接诊断。"}).size(12.).color(MUTED));}
                     });
                 }else{self.host_controls(ui,ctx);}
                 ui.add_space(20.);self.notice_ui(ui);
                 ui.add_space(20.);card().show(ui,|ui|{
-                    ui.label(RichText::new("Mac + iPad 随航 + 接收屏").strong());ui.label(RichText::new("保留现有随航，在 Mac 上选择扩展桌面。连接后到系统“显示器”设置中检查排列，再把一个窗口拖到新增屏幕。").size(13.).color(MUTED));
+                    ui.label(RichText::new("Mac + iPad 随航 + 接收屏").strong());ui.label(RichText::new("三块屏显示同一个 Mac 桌面的不同区域。iPad 随航屏上的 Mac 窗口，可沿相接边缘直接拖到接收屏；无需让 iPad 另连 Windows。").size(13.).color(MUTED));
+                    ui.label(RichText::new("iPad 原生 App、Windows 本机 App 与文件的跨系统拖放仍未实现。").size(12.).color(MUTED));
                     ui.add_space(6.);ui.label(RichText::new("Mac 实机兼容性与随航并用仍需验收；本版本为开发预览。").size(12.).color(MUTED));
                 });
             });
@@ -906,6 +933,9 @@ impl LinkDesk {
                 });
             });
         });
+        if self.mode == Mode::Extend {
+            self.desktop.show_live(ui);
+        }
         if !self.requests.is_empty() {
             ui.add_space(20.);
             ui.label(RichText::new("等待你允许的连接").strong().size(18.));

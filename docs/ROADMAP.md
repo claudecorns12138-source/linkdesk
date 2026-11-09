@@ -7,6 +7,8 @@
 - [x] TLS, explicit fingerprint confirmation, pairing code, host approval.
 - [x] LAN discovery and manual address fallback.
 - [x] Implement Mac virtual-display / capture / encode helper and app bundle build.
+- [x] Select an existing screen and adjacent edge; preview a direct crossing without moving existing screens.
+- [x] Snapshot and check existing display state around virtual-display creation/configuration; abort on changes.
 - [ ] Validate the Mac helper on physical hardware and supported macOS versions.
 - [ ] Validate Mac native capture → Windows receiver over Ethernet and Wi-Fi.
 - [ ] Validate simultaneous original iPad Sidecar + LinkDesk virtual display.

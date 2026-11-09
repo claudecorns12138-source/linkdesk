@@ -49,7 +49,7 @@ pub fn read_record(r: &mut impl Read) -> Result<(u8, Vec<u8>)> {
     read_record_limit(r, MAX_RECORD)
 }
 
-fn read_record_limit(r: &mut impl Read, limit: usize) -> Result<(u8, Vec<u8>)> {
+pub(crate) fn read_record_limit(r: &mut impl Read, limit: usize) -> Result<(u8, Vec<u8>)> {
     let mut size = [0; 4];
     r.read_exact(&mut size)
         .context("connection closed while reading record")?;

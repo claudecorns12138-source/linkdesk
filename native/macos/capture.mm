@@ -9,6 +9,9 @@
 #import <CoreVideo/CoreVideo.h>
 #include <signal.h>
 #include <unistd.h>
+#include <cerrno>
+#include <climits>
+#include "layout_guard.h"
 
 @interface CGVirtualDisplayDescriptor : NSObject
 @property(nonatomic) unsigned int vendorID, productID, serialNum, serialNumber;
@@ -33,6 +36,7 @@
 
 static CGVirtualDisplay *virtualDisplay;
 static id captureOwner;
+static NSDictionary *activeLayout;
 
 static void record(uint8_t kind, NSData *data) {
     if (data.length > 8 * 1024 * 1024 - 1) return;
@@ -49,7 +53,42 @@ static void fail(NSString *message) {
     exit(1);
 }
 
-static CGDirectDisplayID createVirtualDisplay(void) {
+static std::vector<linkdesk::DisplayState> readTopology(void) {
+    CGDirectDisplayID displays[65]; uint32_t count=0;
+    if (CGGetOnlineDisplayList(65,displays,&count)!=kCGErrorSuccess || !count || count>64)
+        fail(@"Could not read the existing display layout safely.");
+    std::vector<linkdesk::DisplayState> result;
+    for (uint32_t i=0;i<count;i++) {
+        auto id=displays[i];
+        CGRect bounds=CGDisplayBounds(id);
+        CGDisplayModeRef mode=CGDisplayCopyDisplayMode(id);
+        if (!mode) fail(@"An existing display mode could not be read safely.");
+        linkdesk::Rect rect{llround(bounds.origin.x),llround(bounds.origin.y),llround(bounds.size.width),llround(bounds.size.height)};
+        if (!rect.valid()) { CGDisplayModeRelease(mode); fail(@"An existing display has unsupported bounds."); }
+        result.push_back({id,rect,CGDisplayModeGetWidth(mode),CGDisplayModeGetHeight(mode),
+            CGDisplayModeGetPixelWidth(mode),CGDisplayModeGetPixelHeight(mode),CGDisplayModeGetRefreshRate(mode),
+            CGDisplayRotation(id),CGDisplayMirrorsDisplay(id),(bool)CGDisplayIsMain(id),(bool)CGDisplayIsActive(id)});
+        CGDisplayModeRelease(mode);
+    }
+    return result;
+}
+static NSDictionary *rectDictionary(const linkdesk::Rect &r) {
+    return @{ @"x":@(r.x), @"y":@(r.y), @"width":@(r.width), @"height":@(r.height) };
+}
+static NSArray *displayDictionaries(const std::vector<linkdesk::DisplayState> &displays) {
+    NSMutableArray *result=[NSMutableArray array];
+    for (const auto &d:displays)
+        [result addObject:@{@"id":@(d.id),@"rect":rectDictionary(d.rect),@"main":@(d.main),@"active":@(d.active),@"mirrored_to":@(d.mirror)}];
+    return result;
+}
+
+static CGDirectDisplayID createVirtualDisplay(uint32_t anchor, NSString *side, const linkdesk::Rect &placement) {
+    // Take the baseline before creating anything. Do not identify or reconfigure
+    // Sidecar using private Continuity APIs; treat all existing screens as owned
+    // by macOS/the user, and keep their complete display states unchanged.
+    const auto baseline=readTopology();
+    if (!linkdesk::placementValid(baseline,anchor,side.UTF8String,placement))
+        fail(@"The selected display edge is stale or occupied. Refresh the layout and choose another side; existing screens were not moved.");
     Class descriptorClass = NSClassFromString(@"CGVirtualDisplayDescriptor");
     Class displayClass = NSClassFromString(@"CGVirtualDisplay");
     Class modeClass = NSClassFromString(@"CGVirtualDisplayMode");
@@ -78,18 +117,22 @@ static CGDirectDisplayID createVirtualDisplay(void) {
     if (![virtualDisplay applySettings:settings]) fail(@"macOS refused the virtual display mode.");
     CGDirectDisplayID display = virtualDisplay.displayID;
     if (!display) fail(@"The virtual display has no display ID.");
+    bool online=false;
+    for (int attempt=0;attempt<40;attempt++) {
+        CGDisplayModeRef mode=CGDisplayCopyDisplayMode(display);
+        online=CGDisplayIsOnline(display) && mode;
+        if (mode) CGDisplayModeRelease(mode);
+        if (online) break;
+        usleep(50000);
+    }
+    if (!online) fail(@"The owned virtual display did not come online.");
+    if (!linkdesk::existingUnchanged(baseline,readTopology(),display))
+        fail(@"An existing display changed while the virtual display was being added. LinkDesk stopped its own extension without reconfiguring Sidecar.");
     // Configure only the newly created display; leave existing Sidecar intact.
     CGDisplayConfigRef config = NULL;
     if (CGBeginDisplayConfiguration(&config) == kCGErrorSuccess) {
-        CGRect main = CGDisplayBounds(CGMainDisplayID());
-        CGFloat right = CGRectGetMaxX(main);
-        CGDirectDisplayID displays[64]; uint32_t count = 0;
-        if (CGGetActiveDisplayList(64, displays, &count) != kCGErrorSuccess)
-            fail(@"Could not read the existing display layout safely.");
-        for (uint32_t i=0;i<count;i++)
-            if (displays[i] != display) right = MAX(right, CGRectGetMaxX(CGDisplayBounds(displays[i])));
         CGError mirror = CGConfigureDisplayMirrorOfDisplay(config, display, kCGNullDirectDisplay);
-        CGError origin = CGConfigureDisplayOrigin(config, display, (int32_t)right, (int32_t)main.origin.y);
+        CGError origin = CGConfigureDisplayOrigin(config, display, (int32_t)placement.x, (int32_t)placement.y);
         if (mirror == kCGErrorSuccess && origin == kCGErrorSuccess) {
             if (CGCompleteDisplayConfiguration(config, kCGConfigureForSession) != kCGErrorSuccess)
                 fail(@"macOS refused the independent desktop layout.");
@@ -100,6 +143,20 @@ static CGDirectDisplayID createVirtualDisplay(void) {
     } else fail(@"Could not begin the independent display configuration.");
     if (CGDisplayMirrorsDisplay(display) != kCGNullDirectDisplay)
         fail(@"The requested independent display is still mirrored; extension was not started.");
+    for (int attempt=0;attempt<40;attempt++) {
+        CGRect bounds=CGDisplayBounds(display);
+        linkdesk::Rect actual{llround(bounds.origin.x),llround(bounds.origin.y),llround(bounds.size.width),llround(bounds.size.height)};
+        if (actual==placement && CGDisplayIsActive(display)) break;
+        usleep(50000);
+    }
+    const auto finalTopology=readTopology();
+    if (!linkdesk::existingUnchanged(baseline,finalTopology,display))
+        fail(@"An existing display position, mode or mirror state changed. LinkDesk stopped only its own extension; Sidecar was not reconfigured.");
+    auto owned=std::find_if(finalTopology.begin(),finalTopology.end(),[&](const auto &d){return d.id==display;});
+    if (owned==finalTopology.end() || !(owned->rect==placement) || !owned->active || owned->mirror)
+        fail(@"macOS did not apply the requested adjacent independent display. Extension was not started.");
+    activeLayout=@{@"display_id":@(display),@"placement":@{@"anchor_id":@(anchor),@"side":side,@"rect":rectDictionary(placement)},
+        @"existing":displayDictionaries(baseline),@"existing_preserved":@YES};
     return display;
 }
 
@@ -223,10 +280,35 @@ static void compressed(void *ref, void *, OSStatus status, VTEncodeInfoFlags, CM
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         signal(SIGPIPE,SIG_IGN);
-        if (argc != 2 || (strcmp(argv[1],"extend") && strcmp(argv[1],"mirror"))) fail(@"Expected extend or mirror mode.");
+        if (argc==2 && !strcmp(argv[1],"list-displays")) {
+            NSData *data=[NSJSONSerialization dataWithJSONObject:@{@"displays":displayDictionaries(readTopology())} options:0 error:nil];
+            if (data.length>4096) fail(@"Too many displays for this development version's layout controls.");
+            record(1,data);
+            return 0;
+        }
+        bool extending=argc==10 && !strcmp(argv[1],"extend");
+        bool mirroring=argc==2 && !strcmp(argv[1],"mirror");
+        uint32_t anchor=0; NSString *side=nil; linkdesk::Rect placement{0,0,1920,1080};
+        if (extending) {
+            if (strcmp(argv[2],"--anchor") || strcmp(argv[4],"--side") || strcmp(argv[6],"--x") || strcmp(argv[8],"--y"))
+                fail(@"Invalid extension layout arguments.");
+            auto parse=[](const char *text)->int64_t {
+                char *end=nullptr; errno=0; long long value=strtoll(text,&end,10);
+                if (errno || !*text || *end) fail(@"Invalid extension layout coordinate.");
+                return value;
+            };
+            int64_t value=parse(argv[3]);
+            if (value<=0 || value>UINT32_MAX) fail(@"Invalid anchor display.");
+            anchor=(uint32_t)value;
+            side=[NSString stringWithUTF8String:argv[5]];
+            if (![@[@"right",@"left",@"above",@"below"] containsObject:side]) fail(@"Invalid extension side.");
+            placement.x=parse(argv[7]); placement.y=parse(argv[9]);
+            if (!placement.valid()) fail(@"Invalid extension bounds.");
+        }
+        if (!extending && !mirroring) fail(@"Expected mirror, list-displays, or extend with an explicit adjacent layout.");
         if (!CGPreflightScreenCaptureAccess() && !CGRequestScreenCaptureAccess())
             fail(@"Screen Recording permission is required. Grant it to LinkDesk and relaunch.");
-        CGDirectDisplayID target = !strcmp(argv[1],"extend") ? createVirtualDisplay() : CGMainDisplayID();
+        CGDirectDisplayID target = extending ? createVirtualDisplay(anchor,side,placement) : CGMainDisplayID();
         // The display server can need a moment before exposing a newly attached display.
         for (int attempt=0;attempt<20;attempt++) {
             __block bool done = false;
@@ -242,7 +324,8 @@ int main(int argc, const char *argv[]) {
             if (selected) {
                 LinkDeskCapture *capture = [LinkDeskCapture new];captureOwner=capture;
                 [capture begin:selected];
-                NSDictionary *ready=@{@"width":@(capture.width),@"height":@(capture.height),@"display_id":@(target),@"experimental":@(!strcmp(argv[1],"extend"))};
+                NSMutableDictionary *ready=[@{@"width":@(capture.width),@"height":@(capture.height),@"display_id":@(target),@"experimental":@(extending)} mutableCopy];
+                if (activeLayout) ready[@"layout"]=activeLayout;
                 record(1,[NSJSONSerialization dataWithJSONObject:ready options:0 error:nil]);
                 [[NSRunLoop mainRunLoop] run];
                 return 0;

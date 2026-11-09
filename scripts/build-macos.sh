@@ -6,6 +6,8 @@ export CARGO_ENCODED_RUSTFLAGS="$(printf '%s\037%s\037%s\037%s' --remap-path-pre
 cargo build --release --locked --target-dir target
 app="dist/LinkDesk.app/Contents"
 mkdir -p "$app/MacOS" "$app/Resources"
+xcrun clang++ -std=c++17 -Wall -Wextra -Werror native/macos/layout_test.cpp -o target/layout-guard-tests
+target/layout-guard-tests
 xcrun clang++ -std=c++17 -fobjc-arc -O2 -mmacosx-version-min=14.4 -ffile-prefix-map="$HOME=local-user" \
   -framework Foundation -framework CoreGraphics -framework ScreenCaptureKit \
   -framework VideoToolbox -framework CoreMedia -framework CoreVideo \
