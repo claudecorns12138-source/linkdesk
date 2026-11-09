@@ -16,13 +16,15 @@ Acceptance: macOS Displays shows an independent LinkDesk display; three screens 
 
 ## Milestone 2 — daily use
 
+- [x] Chinese native connection flow, retry after failure and in-memory fingerprint confirmation cache.
+- [x] Host controls for disconnecting a specific receiver; bounded discovery and control messages.
 - [ ] Saved device identities and revocable device trust, backed by OS credential stores.
 - [ ] One-click reconnect and tray/menu bar controls.
 - [ ] Receiver resolution/DPI/rotation negotiation and Retina/HiDPI modes.
 - [ ] Hardware decoding: Media Foundation/D3D11 on Windows; VideoToolbox/Metal on Mac.
 - [ ] Cursor channel, frame pacing, adaptive encoding, bandwidth/latency diagnostics.
 - [ ] QUIC transport experiment with a measured comparison against TCP/TLS.
-- [ ] Per-device independent virtual displays, host disconnect controls, session recovery.
+- [ ] Per-device independent virtual displays and automatic session recovery.
 - [ ] Signed/notarized release packaging and permission onboarding.
 
 ## Milestone 3 — other host / receiver systems

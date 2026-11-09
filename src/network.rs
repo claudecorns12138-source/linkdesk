@@ -34,9 +34,36 @@ pub enum Event {
     Certificate {
         fingerprint: String,
         decision: SyncSender<bool>,
+        changed: bool,
     },
-    Status(String),
+    ReceiverState(ReceiverPhase),
+    ReceiverFinished {
+        error: Option<String>,
+    },
     SourceError(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiverPhase {
+    Connecting,
+    Verifying,
+    WaitingApproval,
+    WaitingVideo,
+    Streaming,
+}
+
+#[derive(Default)]
+pub struct ReceiverStats {
+    decoded: AtomicU64,
+    bytes: AtomicU64,
+}
+impl ReceiverStats {
+    pub fn counts(&self) -> (u64, u64) {
+        (
+            self.decoded.load(Ordering::Relaxed),
+            self.bytes.load(Ordering::Relaxed),
+        )
+    }
 }
 
 pub struct DecodedFrame {
@@ -97,6 +124,7 @@ pub struct Host {
     pin: Arc<Mutex<(String, Instant)>>,
     stop: Arc<AtomicBool>,
     control: Arc<SourceControl>,
+    connections: Arc<Mutex<HashMap<u64, TcpStream>>>,
 }
 impl Host {
     pub fn pin(&self) -> String {
@@ -115,7 +143,15 @@ impl Host {
     }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        for (_, socket) in self.connections.lock().unwrap().drain() {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
         self.control.stop();
+    }
+    pub fn disconnect(&self, id: u64) {
+        if let Some(socket) = self.connections.lock().unwrap().remove(&id) {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
     }
 }
 impl Drop for Host {
@@ -141,6 +177,7 @@ pub fn start_host(bind: &str, mode: Mode, events: mpsc::Sender<Event>) -> Result
     let hub = Arc::new(Mutex::new(Hub::default()));
     let control = Arc::new(SourceControl::default());
     let frames = Arc::new(AtomicU64::new(0));
+    let connections: Arc<Mutex<HashMap<u64, TcpStream>>> = Arc::default();
     let handle = Host {
         address,
         fingerprint: identity.fingerprint.clone(),
@@ -148,6 +185,7 @@ pub fn start_host(bind: &str, mode: Mode, events: mpsc::Sender<Event>) -> Result
         stop: stop.clone(),
         control: control.clone(),
         frames: frames.clone(),
+        connections: connections.clone(),
     };
     if !address.ip().is_loopback() {
         let _ = discovery::announce(address.port(), stop.clone());
@@ -198,6 +236,12 @@ pub fn start_host(bind: &str, mode: Mode, events: mpsc::Sender<Event>) -> Result
                         active.clone(),
                     );
                     let id = next.fetch_add(1, Ordering::Relaxed);
+                    // Register even handshakes and pending requests, so stop and
+                    // per-device disconnect also interrupt blocked TLS reads.
+                    if let Ok(clone) = socket.try_clone() {
+                        connections.lock().unwrap().insert(id, clone);
+                    }
+                    let connections = connections.clone();
                     thread::spawn(move || {
                         let _ = serve_receiver(
                             socket,
@@ -209,6 +253,7 @@ pub fn start_host(bind: &str, mode: Mode, events: mpsc::Sender<Event>) -> Result
                             id,
                         );
                         hub.lock().unwrap().subscribers.retain(|s| s.id != id);
+                        connections.lock().unwrap().remove(&id);
                         let _ = events.send(Event::PeerDisconnected { id });
                         active.fetch_sub(1, Ordering::Relaxed);
                     });
@@ -239,7 +284,18 @@ fn serve_receiver(
     socket.set_write_timeout(Some(Duration::from_secs(3)))?;
     let mut tls = StreamOwned::new(ServerConnection::new(config)?, socket);
     let hello: Hello = protocol::read_json(&mut tls)?;
-    protocol::validate_hello(&hello)?;
+    if let Err(error) = protocol::validate_hello(&hello) {
+        // Give an older client a useful error rather than an unexplained EOF.
+        protocol::write_json(
+            &mut tls,
+            &Welcome {
+                accepted: false,
+                message: error.to_string(),
+                codec: "h264".into(),
+            },
+        )?;
+        return Ok(());
+    }
     let valid = {
         let p = pin.lock().unwrap();
         p.1 > Instant::now() && constant_equal(p.0.as_bytes(), hello.pin.as_bytes())
@@ -272,7 +328,7 @@ fn serve_receiver(
             Err(_) => {}
         }
     };
-    let rx = if allow {
+    let rx = if allow && !stop.load(Ordering::Relaxed) {
         let mut hub = hub.lock().unwrap();
         if hub.subscribers.len() < 4 {
             Some(hub.subscribe(id))
@@ -332,12 +388,30 @@ fn connect_tls(
     address: &str,
     pin: Option<String>,
 ) -> Result<StreamOwned<ClientConnection, TcpStream>> {
-    let address = address
-        .to_socket_addrs()?
-        .next()
-        .context("host address not found")?;
-    let socket = TcpStream::connect_timeout(&address, Duration::from_secs(5))
-        .context("cannot reach host; check IP, network isolation and firewall")?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut connected = None;
+    let mut last_error = None;
+    for address in address.to_socket_addrs()?.take(8) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match TcpStream::connect_timeout(&address, remaining) {
+            Ok(socket) => {
+                connected = Some(socket);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let socket = connected.ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot reach host; check IP, network isolation and firewall: {}",
+            last_error
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "host address not found".into())
+        )
+    })?;
     socket.set_nodelay(true)?;
     socket.set_read_timeout(Some(Duration::from_secs(8)))?;
     socket.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -365,6 +439,7 @@ pub fn probe_fingerprint(address: &str) -> Result<String> {
 pub struct Receiver {
     stop: Arc<AtomicBool>,
     socket: Arc<Mutex<Option<TcpStream>>>,
+    pub stats: Arc<ReceiverStats>,
 }
 impl Receiver {
     pub fn stop(&self) {
@@ -386,63 +461,95 @@ pub fn start_receiver(
     events: mpsc::Sender<Event>,
     latest: LatestFrame,
 ) -> Receiver {
+    start_receiver_with_trust(address, pin, None, events, latest)
+}
+
+pub fn start_receiver_with_trust(
+    address: String,
+    pin: String,
+    trusted: Option<String>,
+    events: mpsc::Sender<Event>,
+    latest: LatestFrame,
+) -> Receiver {
     let stop = Arc::new(AtomicBool::new(false));
     let socket: Arc<Mutex<Option<TcpStream>>> = Arc::default();
     let handle = Receiver {
         stop: stop.clone(),
         socket: socket.clone(),
+        stats: Arc::default(),
     };
+    let stats = handle.stats.clone();
     thread::spawn(move || {
         let result = (|| -> Result<()> {
+            events.send(Event::ReceiverState(ReceiverPhase::Connecting))?;
             let fingerprint = probe_fingerprint(&address)?;
-            let (tx, rx) = mpsc::sync_channel(1);
-            events.send(Event::Certificate {
-                fingerprint: fingerprint.clone(),
-                decision: tx,
-            })?;
-            let deadline = Instant::now() + Duration::from_secs(90);
-            loop {
-                ensure!(
-                    !stop.load(Ordering::Relaxed) && Instant::now() < deadline,
-                    "Pairing cancelled"
-                );
-                match rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(true) => break,
-                    Ok(false) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        bail!("Fingerprint was not confirmed")
+            ensure!(!stop.load(Ordering::Relaxed), "Pairing cancelled");
+            if trusted.as_ref() != Some(&fingerprint) {
+                events.send(Event::ReceiverState(ReceiverPhase::Verifying))?;
+                let (tx, rx) = mpsc::sync_channel(1);
+                events.send(Event::Certificate {
+                    fingerprint: fingerprint.clone(),
+                    decision: tx,
+                    changed: trusted.is_some(),
+                })?;
+                let deadline = Instant::now() + Duration::from_secs(90);
+                loop {
+                    ensure!(
+                        !stop.load(Ordering::Relaxed) && Instant::now() < deadline,
+                        "Pairing cancelled"
+                    );
+                    match rx.recv_timeout(Duration::from_millis(100)) {
+                        Ok(true) => break,
+                        Ok(false) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            bail!("Fingerprint was not confirmed")
+                        }
+                        Err(_) => {}
                     }
-                    Err(_) => {}
                 }
             }
             // Reconnect with exact pinning before sending any application identity.
             let mut tls = connect_tls(&address, Some(fingerprint))?;
-            *socket.lock().unwrap() = Some(tls.sock.try_clone()?);
+            {
+                let mut registered = socket.lock().unwrap();
+                ensure!(!stop.load(Ordering::Relaxed), "Pairing cancelled");
+                *registered = Some(tls.sock.try_clone()?);
+            }
             tls.sock.set_read_timeout(Some(Duration::from_secs(65)))?;
             protocol::write_json(
                 &mut tls,
                 &Hello {
                     protocol: protocol::VERSION,
-                    name: "LinkDesk receiver".into(),
+                    name: if cfg!(windows) {
+                        "Windows 接收屏"
+                    } else if cfg!(target_os = "macos") {
+                        "Mac 接收屏"
+                    } else {
+                        "Linux 接收屏"
+                    }
+                    .into(),
                     pin,
                 },
             )?;
-            events.send(Event::Status("Waiting for approval on the host…".into()))?;
+            events.send(Event::ReceiverState(ReceiverPhase::WaitingApproval))?;
             let welcome: Welcome = protocol::read_json(&mut tls)?;
             ensure!(welcome.accepted, "{}", welcome.message);
             ensure!(welcome.codec == "h264", "unsupported video codec");
-            events.send(Event::Status("Connected · native H.264 / TLS".into()))?;
+            events.send(Event::ReceiverState(ReceiverPhase::WaitingVideo))?;
             // Static screens can legitimately produce no new capture frames.
             tls.sock.set_read_timeout(None)?;
             let keepalive = socket2::TcpKeepalive::new()
                 .with_time(Duration::from_secs(10))
                 .with_interval(Duration::from_secs(5));
             let _ = socket2::SockRef::from(&tls.sock).set_tcp_keepalive(&keepalive);
-            receive_frames(&mut tls, stop.clone(), latest)
+            receive_frames(&mut tls, stop.clone(), latest, stats, Some(&events))
         })();
+        if let Some(socket) = socket.lock().unwrap().take() {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
         if !stop.load(Ordering::Relaxed) {
-            if let Err(e) = result {
-                let _ = events.send(Event::Status(format!("{e:#}")));
-            }
+            let _ = events.send(Event::ReceiverFinished {
+                error: result.err().map(|e| format!("{e:#}")),
+            });
         }
     });
     handle
@@ -452,9 +559,12 @@ fn receive_frames(
     reader: &mut impl std::io::Read,
     stop: Arc<AtomicBool>,
     latest: LatestFrame,
+    stats: Arc<ReceiverStats>,
+    events: Option<&mpsc::Sender<Event>>,
 ) -> Result<()> {
     let mut decoder = Decoder::new()?;
     let mut last = None;
+    let mut first = true;
     while !stop.load(Ordering::Relaxed) {
         let frame = protocol::next_frame(reader)?;
         if stop.load(Ordering::Relaxed) {
@@ -464,6 +574,9 @@ fn receive_frames(
             ensure!(frame.sequence > last, "reordered video frame");
         }
         last = Some(frame.sequence);
+        stats
+            .bytes
+            .fetch_add(frame.data.len() as u64, Ordering::Relaxed);
         if let Some(decoded) = decoder.decode(&frame.data)? {
             let (w, h) = decoded.dimensions();
             protocol::validate_dimensions(w as u32, h as u32)?;
@@ -473,12 +586,19 @@ fn receive_frames(
             );
             let mut rgb = vec![0; w * h * 3];
             decoded.write_rgb8(&mut rgb);
+            stats.decoded.fetch_add(1, Ordering::Relaxed);
             *latest.lock().unwrap() = Some(DecodedFrame {
                 rgb,
                 width: w,
                 height: h,
                 sequence: frame.sequence,
             });
+            if first {
+                if let Some(events) = events {
+                    let _ = events.send(Event::ReceiverState(ReceiverPhase::Streaming));
+                }
+                first = false;
+            }
         }
     }
     Ok(())
@@ -488,6 +608,117 @@ fn receive_frames(
 mod tests {
     use super::*;
     use std::io::Cursor;
+    #[test]
+    fn failed_connection_emits_completion_instead_of_staying_busy() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        drop(listener);
+        let (tx, rx) = mpsc::channel();
+        let _receiver = start_receiver(address, "000000".into(), tx, Arc::default());
+        let deadline = Instant::now() + Duration::from_secs(7);
+        let mut finished = false;
+        while Instant::now() < deadline {
+            if let Ok(Event::ReceiverFinished { error }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                assert!(error.is_some());
+                finished = true;
+                break;
+            }
+        }
+        assert!(finished, "UI needs a completion event to enable retry");
+    }
+
+    #[test]
+    fn host_disconnect_interrupts_native_receiver_and_reports_completion() {
+        let (host_tx, host_events) = mpsc::channel();
+        let host = start_host("127.0.0.1:0", Mode::Test, host_tx).unwrap();
+        let (tx, events) = mpsc::channel();
+        let receiver = start_receiver_with_trust(
+            host.address.to_string(),
+            host.pin(),
+            Some(host.fingerprint.clone()),
+            tx,
+            Arc::default(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut peer = None;
+        while Instant::now() < deadline {
+            if let Ok(Event::PairRequest { id, decision, .. }) =
+                host_events.recv_timeout(Duration::from_millis(100))
+            {
+                peer = Some(id);
+                decision.send(true).unwrap();
+                break;
+            }
+        }
+        let mut streaming = false;
+        while Instant::now() < deadline {
+            match events.recv_timeout(Duration::from_millis(100)) {
+                Ok(Event::Certificate { .. }) => {
+                    panic!("the exact confirmed fingerprint should not prompt again")
+                }
+                Ok(Event::ReceiverState(ReceiverPhase::Streaming)) => {
+                    streaming = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(streaming);
+        assert!(receiver.stats.counts().0 > 0);
+        host.disconnect(peer.unwrap());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut finished = false;
+        while Instant::now() < deadline {
+            if let Ok(Event::ReceiverFinished { .. }) =
+                events.recv_timeout(Duration::from_millis(100))
+            {
+                finished = true;
+                break;
+            }
+        }
+        assert!(finished, "host revoke must wake a receiver's blocking read");
+        receiver.stop();
+        host.stop();
+    }
+
+    #[test]
+    fn changed_host_identity_requires_confirmation_before_sending_pin() {
+        let (host_tx, host_events) = mpsc::channel();
+        let host = start_host("127.0.0.1:0", Mode::Test, host_tx).unwrap();
+        let (tx, events) = mpsc::channel();
+        let receiver = start_receiver_with_trust(
+            host.address.to_string(),
+            host.pin(),
+            Some("previous identity".into()),
+            tx,
+            Arc::default(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut checked = false;
+        while Instant::now() < deadline {
+            if let Ok(Event::Certificate {
+                changed, decision, ..
+            }) = events.recv_timeout(Duration::from_millis(100))
+            {
+                assert!(changed);
+                decision.send(false).unwrap();
+                checked = true;
+                break;
+            }
+        }
+        assert!(checked);
+        let deadline = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < deadline {
+            assert!(!matches!(
+                host_events.recv_timeout(Duration::from_millis(25)),
+                Ok(Event::PairRequest { .. })
+            ));
+        }
+        receiver.stop();
+        host.stop();
+    }
     #[test]
     fn encrypted_approved_native_video_and_wrong_pin() {
         let (tx, rx) = mpsc::channel();
@@ -505,7 +736,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(protocol::read_json::<Welcome>(&mut wrong).is_err());
+        assert!(!protocol::read_json::<Welcome>(&mut wrong).unwrap().accepted);
         let wrong_pin = if host.pin() == "000000" {
             "000001"
         } else {
@@ -578,6 +809,8 @@ mod tests {
             &mut Cursor::new(stream),
             Arc::new(AtomicBool::new(false)),
             latest.clone(),
+            Arc::default(),
+            None,
         );
         assert_eq!(latest.lock().unwrap().as_ref().unwrap().sequence, 2);
     }

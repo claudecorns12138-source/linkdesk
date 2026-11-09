@@ -1,6 +1,6 @@
 # Native architecture
 
-The receiver is an eframe/winit desktop window rendered with OpenGL. There is no HTML UI, browser capture, WebView, or web receiver.
+The receiver is an eframe/winit desktop window. Its default WGPU renderer uses native graphics APIs; OpenGL is retained as a startup fallback. There is no HTML UI, browser capture, WebView, or web receiver.
 
 ```mermaid
 flowchart LR
@@ -25,7 +25,7 @@ Windows extension needs a separate user-mode indirect display driver. There is n
 
 1. Host generates a per-run ECDSA identity and an expiring random pairing code. Private keys stay in process memory.
 2. Receiver probes the host certificate without sending application data. The user compares its SHA-256 fingerprint with the host.
-3. Receiver reconnects, pins the exact certificate, validates TLS handshake signatures, and only then sends its pairing code and generic device name.
+3. Receiver reconnects, pins the exact certificate, validates TLS handshake signatures, and only then sends its pairing code and generic device name. Confirmed fingerprints are cached only in memory for that address; changed identities require confirmation again.
 4. Host validates protocol/version/code and requires a local Allow decision before sending video. Pair attempts and concurrent handshakes are bounded.
 5. H.264 Annex B frames travel in bounded, length-prefixed records over TCP/TLS. No cloud service or relay is configured.
 
@@ -34,6 +34,8 @@ This MVP uses a single TCP stream per receiver. Packet loss causes head-of-line 
 Records: big-endian u32 length (including kind byte), u8 kind, payload. Kind 1 is bounded JSON control, 2 is video, and 3 is a normalized capture error. Video payload: u64 sequence, u32 width, u32 height, u8 keyframe, Annex B bytes. Maximum record: 8 MiB; maximum advertised dimensions: 4096×2160; current capture target: ≤1920×1080.
 
 No unbounded frame queue exists. Receivers render only the latest decoded frame. A host caches at most one bounded GOP for joining a static screen. A full receiver channel closes that stream rather than dropping a referenced inter-frame and continuing with corruption.
+
+The UI uses a fresh event channel and frame slot for every receive attempt, so stale completion events or in-flight frames cannot overwrite a newer session. A completion event releases the busy state after connection failure. Host-side per-device disconnect closes its registered TCP socket, including pending requests; blocked receiver reads wake on shutdown. LAN beacons are sent through per-interface IPv4 broadcast sockets and refreshed after network changes, with a generic broadcast fallback.
 
 ## Primary references
 

@@ -46,22 +46,28 @@ pub fn write_record(w: &mut impl Write, kind: u8, bytes: &[u8]) -> Result<()> {
 }
 
 pub fn read_record(r: &mut impl Read) -> Result<(u8, Vec<u8>)> {
+    read_record_limit(r, MAX_RECORD)
+}
+
+fn read_record_limit(r: &mut impl Read, limit: usize) -> Result<(u8, Vec<u8>)> {
     let mut size = [0; 4];
     r.read_exact(&mut size)
         .context("connection closed while reading record")?;
     let n = u32::from_be_bytes(size) as usize;
-    ensure!((1..=MAX_RECORD).contains(&n), "invalid record size");
+    ensure!((1..=limit).contains(&n), "invalid record size");
     let mut bytes = vec![0; n];
     r.read_exact(&mut bytes)?;
     Ok((bytes[0], bytes[1..].to_vec()))
 }
 
 pub fn write_json(w: &mut impl Write, value: &impl Serialize) -> Result<()> {
-    write_record(w, JSON, &serde_json::to_vec(value)?)
+    let data = serde_json::to_vec(value)?;
+    ensure!(data.len() <= 4096, "control record too large");
+    write_record(w, JSON, &data)
 }
 
 pub fn read_json<T: DeserializeOwned>(r: &mut impl Read) -> Result<T> {
-    let (kind, data) = read_record(r)?;
+    let (kind, data) = read_record_limit(r, 4097)?;
     ensure!(
         kind == JSON && data.len() <= 4096,
         "expected control record"
@@ -111,7 +117,9 @@ pub fn validate_dimensions(width: u32, height: u32) -> Result<()> {
 pub fn validate_hello(hello: &Hello) -> Result<()> {
     ensure!(hello.protocol == VERSION, "protocol version mismatch");
     ensure!(
-        !hello.name.trim().is_empty() && hello.name.chars().count() <= 40,
+        !hello.name.trim().is_empty()
+            && hello.name.chars().count() <= 40
+            && !hello.name.chars().any(char::is_control),
         "invalid device name"
     );
     ensure!(
@@ -141,6 +149,24 @@ pub fn next_frame(r: &mut impl Read) -> Result<VideoFrame> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    #[test]
+    fn reject_large_control_header_before_allocating_or_reading_body() {
+        struct HeaderOnly {
+            read: bool,
+        }
+        impl Read for HeaderOnly {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                assert!(
+                    !self.read,
+                    "control parser must reject before requesting the body"
+                );
+                self.read = true;
+                buffer[..4].copy_from_slice(&16000u32.to_be_bytes());
+                Ok(4)
+            }
+        }
+        assert!(read_json::<Hello>(&mut HeaderOnly { read: false }).is_err());
+    }
     #[test]
     fn bounded_frames_round_trip() {
         let f = VideoFrame {
