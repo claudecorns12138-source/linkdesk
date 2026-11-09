@@ -82,8 +82,14 @@ static CGDirectDisplayID createVirtualDisplay(void) {
     CGDisplayConfigRef config = NULL;
     if (CGBeginDisplayConfiguration(&config) == kCGErrorSuccess) {
         CGRect main = CGDisplayBounds(CGMainDisplayID());
+        CGFloat right = CGRectGetMaxX(main);
+        CGDirectDisplayID displays[64]; uint32_t count = 0;
+        if (CGGetActiveDisplayList(64, displays, &count) != kCGErrorSuccess)
+            fail(@"Could not read the existing display layout safely.");
+        for (uint32_t i=0;i<count;i++)
+            if (displays[i] != display) right = MAX(right, CGRectGetMaxX(CGDisplayBounds(displays[i])));
         CGError mirror = CGConfigureDisplayMirrorOfDisplay(config, display, kCGNullDirectDisplay);
-        CGError origin = CGConfigureDisplayOrigin(config, display, (int32_t)CGRectGetMaxX(main), (int32_t)main.origin.y);
+        CGError origin = CGConfigureDisplayOrigin(config, display, (int32_t)right, (int32_t)main.origin.y);
         if (mirror == kCGErrorSuccess && origin == kCGErrorSuccess) {
             if (CGCompleteDisplayConfiguration(config, kCGConfigureForSession) != kCGErrorSuccess)
                 fail(@"macOS refused the independent desktop layout.");
