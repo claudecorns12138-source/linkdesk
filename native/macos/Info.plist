@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>LinkDesk</string>
+<key>CFBundleDisplayName</key><string>LinkDesk</string>
+<key>CFBundleIdentifier</key><string>org.linkdesk.native</string>
+<key>CFBundleExecutable</key><string>linkdesk</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSMinimumSystemVersion</key><string>14.4</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSScreenCaptureUsageDescription</key><string>LinkDesk captures the display you choose to send to your paired LAN receiver.</string>
+<key>NSLocalNetworkUsageDescription</key><string>LinkDesk discovers and connects to your displays on your local network.</string>
+</dict></plist>

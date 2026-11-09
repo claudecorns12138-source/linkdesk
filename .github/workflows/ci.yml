@@ -1,0 +1,58 @@
+name: Native build and test
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Linux graphics and assembler dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libgl1-mesa-dev nasm
+      - name: Format
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test native protocol, pairing, TLS and H.264
+        run: cargo test --locked --all-targets
+      - name: Privacy check
+        run: python scripts/privacy_check.py --self-test
+      - name: Build macOS app and native capture helper
+        if: runner.os == 'macOS'
+        run: bash scripts/build-macos.sh
+      - name: Build Windows app
+        if: runner.os == 'Windows'
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: ./scripts/build-windows.ps1
+      - name: Build Linux receiver
+        if: runner.os == 'Linux'
+        run: cargo build --release --locked
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent dist/LinkDesk.app dist/LinkDesk-macos.zip
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: LinkDesk-macos-development
+          path: dist/LinkDesk-macos.zip
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: LinkDesk-windows-development
+          path: dist/windows/
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: LinkDesk-linux-receiver-development
+          path: target/release/linkdesk
