@@ -6,6 +6,8 @@ Native desktop applications, not a browser viewer or a WebView. Written in Rust,
 
 > Development prototype. Native encrypted video transport and desktop rendering are implemented. macOS extension uses an experimental private display interface and requires real Mac validation. This is not a finished Sidecar replacement.
 
+**Development downloads:** [macOS and Windows alpha packages](https://github.com/claudecorns12138-source/linkdesk/releases/tag/v0.1.0-alpha.1). These are native applications built in CI, not browser clients. Follow the pairing instructions below; real Mac extension and Sidecar coexistence remain unverified.
+
 ## Current scope
 
 | Capability | Status |
