@@ -8,6 +8,8 @@ Native desktop applications, not a browser viewer or a WebView. Written in Rust,
 
 **Development downloads:** [macOS and Windows alpha packages](https://github.com/claudecorns12138-source/linkdesk/releases). These are native applications built in CI, not browser clients. Follow the pairing instructions below; real Mac extension and Sidecar coexistence remain unverified.
 
+当前组合：Mac 主机升级到 [Alpha 3](https://github.com/claudecorns12138-source/linkdesk/releases/tag/v0.1.0-alpha.3)，Windows 接收端继续使用 [Alpha 2](https://github.com/claudecorns12138-source/linkdesk/releases/tag/v0.1.0-alpha.2)。本次扩展屏排列改动在 Mac 主机，网络协议及接收流程保持兼容；Alpha 3 Windows CI 发布时仍在排队，因此未附新 Windows 安装包。
+
 ## Alpha 3：保留随航，直接跨屏拖动
 
 Mac、随航 iPad、LinkDesk Windows 组成同一个 Mac 桌面。目标是把 iPad 上的 Mac 窗口直接拖到 Windows 那块屏，再拖回来。
