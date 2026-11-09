@@ -46,7 +46,7 @@ struct LinkDesk {
 
 impl LinkDesk {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        cc.egui_ctx.set_theme(egui::Theme::Dark);
         let (tx, events) = mpsc::channel();
         let (dtx, devices) = mpsc::channel();
         let discovery_stop = Arc::new(AtomicBool::new(false));

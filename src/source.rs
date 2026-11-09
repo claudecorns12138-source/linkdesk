@@ -1,5 +1,7 @@
 use crate::protocol::{self, VideoFrame};
-use anyhow::{bail, Context, Result};
+#[cfg(any(windows, target_os = "macos"))]
+use anyhow::Context;
+use anyhow::{bail, Result};
 use openh264::{
     encoder::Encoder,
     formats::{RgbSliceU8, YUVBuffer},
