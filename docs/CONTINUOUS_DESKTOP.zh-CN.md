@@ -10,6 +10,10 @@ flowchart LR
 
 图示是桌面关系，网络传输仍分别为 Mac → 随航 iPad、Mac → LinkDesk Windows。窗口属于 Mac，Windows 用作显示终端。
 
+![原生屏幕排列预览，虚构屏幕数据](images/layout-preview-alpha3.png)
+
+以上是 Windows 上原生应用的布局演示截图，使用虚构屏幕数据；不是 Mac、iPad 和 Windows 实机连通证明。
+
 ## 使用步骤
 
 1. 保持现有 iPad 随航为**扩展显示**，不需要断开或重新设置。

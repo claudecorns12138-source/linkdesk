@@ -4,6 +4,8 @@ Record outcomes, not personal device identifiers. Do not paste raw screenshots o
 
 | Check | Current evidence |
 | --- | --- |
+| Alpha 3 local checks | Strict Clippy and all 21 Rust tests passed locally. The same C++ immutable-layout guard used by the Mac helper passed its portable native test with warnings treated as errors |
+| Alpha 3 native layout UI | Windows native WGPU debug window visually checked with fictional three-screen data: adjacent edge preview, direction picker, occupied-side error, restored valid plan, scrolling and maximized layout. No real Mac display query or mutation occurred in preview mode |
 | Windows Alpha 2 local checks | `cargo check --all-targets`, strict Clippy and 15 tests passed; native WGPU debug application exercised on Windows. CI release packages are checked separately below |
 | TLS / pairing / native H.264 round trip | All 15 automated tests passed locally, including actual TLS + approved native H.264 encode/decode |
 | Native rendered video | Alpha 2 Windows native WGPU debug window visually verified with actual H.264 → TLS → decode → texture playback. Moving generated video filled the screen; F11 / Esc returned to the Chinese windowed interface. Debug synthetic frame rate is not a latency measurement |
