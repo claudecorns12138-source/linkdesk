@@ -39,6 +39,8 @@ No unbounded frame queue exists. Receivers render only the latest decoded frame.
 
 The UI uses a fresh event channel and frame slot for every receive attempt, so stale completion events or in-flight frames cannot overwrite a newer session. A completion event releases the busy state after connection failure. Host-side per-device disconnect closes its registered TCP socket, including pending requests; blocked receiver reads wake on shutdown. LAN beacons are sent through per-interface IPv4 broadcast sockets and refreshed after network changes, with a generic broadcast fallback.
 
+Capture subprocess ownership is represented by a scope lease. Stopping the host permanently closes that control, kills and reaps its registered child, and rejects/reaps a child that finishes starting after cancellation. Returning or unwinding from Mac capture drops its lease, so cleanup does not depend on the UI polling an error. The Mac helper also checks parent identity on an independent utility-queue timer: a dead owner ends the helper even if a static desktop produces no more video frames. It never kills another application or reconfigures existing displays. Its `self-test-parent` mode exercises process ownership on macOS CI without enumerating screens, requesting capture permission, or creating a display. Shareable-content completion state is accessed on the main queue with a bounded monotonic deadline; late completions are ignored. Encoder preparation and callback errors are surfaced as capture failures.
+
 ## Primary references
 
 - [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit)

@@ -17,4 +17,5 @@ cp native/macos/Info.plist "$app/Info.plist"
 cp LICENSE THIRD_PARTY_NOTICES.md "$app/Resources/"
 codesign --force --sign - "$app/MacOS/linkdesk-mac-helper"
 codesign --force --deep --sign - dist/LinkDesk.app
+python3 scripts/test-macos-helper-lifecycle.py "$app/MacOS/linkdesk-mac-helper"
 printf 'Built dist/LinkDesk.app (ad-hoc signed development build).\n'

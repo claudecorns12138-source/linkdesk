@@ -12,10 +12,9 @@ use openh264::{
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
 use std::{
-    process::Child,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -37,24 +36,7 @@ impl Mode {
     }
 }
 
-pub struct SourceControl {
-    pub child: Mutex<Option<Child>>,
-}
-impl Default for SourceControl {
-    fn default() -> Self {
-        Self {
-            child: Mutex::new(None),
-        }
-    }
-}
-impl SourceControl {
-    pub fn stop(&self) {
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
+pub use crate::managed_child::SourceControl;
 
 pub fn run(
     mode: Mode,
@@ -226,6 +208,9 @@ fn mac_capture(
     } else {
         None
     };
+    if stop.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     let mut command = Command::new(crate::desktop::helper_path()?);
     if let Some(p) = planned {
         command
@@ -247,17 +232,14 @@ fn mac_capture(
         .spawn()
         .context("Mac helper missing; run scripts/build-macos.sh")?;
     let mut stdout = child.stdout.take().context("missing helper output")?;
-    {
-        let mut registered = control.child.lock().unwrap();
-        // Stopping a host while its read-only topology probe runs must never
-        // leave a late-started helper and virtual display behind.
-        if stop.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(());
-        }
-        *registered = Some(child);
+    if stop.load(Ordering::Relaxed) {
+        control.stop();
     }
+    // The lease also stops/reaps the helper on early return or unwinding.
+    // A permanently stopped control rejects and reaps a late subprocess.
+    let Some(_session) = control.attach(child) else {
+        return Ok(());
+    };
     let mut seq = 0;
     while !stop.load(Ordering::Relaxed) {
         let (kind, data) = protocol::read_record(&mut stdout)?;

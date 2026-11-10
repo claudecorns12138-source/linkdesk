@@ -12,6 +12,8 @@ Native desktop applications, not a browser viewer or a WebView. Written in Rust,
 
 ## Alpha 3：保留随航，直接跨屏拖动
 
+Alpha 4 源码继续加固采集组件生命周期：停止后拒绝并回收迟到的子进程，采集函数提前结束时自动清理；Mac 组件独立监测主程序退出，避免静态画面下遗留采集进程。共享内容查询改为同队列更新状态并限制等待时间，编码器错误会结束自有会话。macOS CI 另用不访问显示器的测试模式验证父进程退出行为；这些测试不替代随航实机验收。
+
 Mac、随航 iPad、LinkDesk Windows 组成同一个 Mac 桌面。目标是把 iPad 上的 Mac 窗口直接拖到 Windows 那块屏，再拖回来。
 
 - 新增相邻屏幕与上下左右位置选择，原生排列预览标出可穿过的公共边缘。

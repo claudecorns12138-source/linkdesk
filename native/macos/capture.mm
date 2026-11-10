@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <cerrno>
 #include <climits>
+#include <chrono>
+#include <dispatch/dispatch.h>
 #include "layout_guard.h"
 
 @interface CGVirtualDisplayDescriptor : NSObject
@@ -37,6 +39,22 @@
 static CGVirtualDisplay *virtualDisplay;
 static id captureOwner;
 static NSDictionary *activeLayout;
+static dispatch_source_t parentWatchdog;
+
+static void watchParent(void) {
+    const pid_t parent=getppid();
+    if (parent<=1) _exit(0);
+    // Independent of frame delivery and the main run loop: static desktops,
+    // permission dialogs and a blocked output pipe must not leave a helper
+    // alive after its Rust host dies. Exiting releases only our own resources.
+    parentWatchdog=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,
+        dispatch_get_global_queue(QOS_CLASS_UTILITY,0));
+    if (!parentWatchdog) _exit(1);
+    dispatch_source_set_timer(parentWatchdog,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),
+        NSEC_PER_SEC/2,NSEC_PER_SEC/10);
+    dispatch_source_set_event_handler(parentWatchdog,^{ if (getppid()!=parent) _exit(0); });
+    dispatch_resume(parentWatchdog);
+}
 
 static void record(uint8_t kind, NSData *data) {
     if (data.length > 8 * 1024 * 1024 - 1) return;
@@ -171,7 +189,8 @@ static CGDirectDisplayID createVirtualDisplay(uint32_t anchor, NSString *side, c
 @end
 
 static void compressed(void *ref, void *, OSStatus status, VTEncodeInfoFlags, CMSampleBufferRef sample) {
-    if (status != noErr || !sample) return;
+    if (status != noErr) fail(@"The native H.264 encoder stopped. LinkDesk ended its own capture session.");
+    if (!sample) return;
     [(__bridge LinkDeskCapture *)ref encoded:sample];
 }
 
@@ -196,7 +215,8 @@ static void compressed(void *ref, void *, OSStatus status, VTEncodeInfoFlags, CM
     };
     if (VTSessionSetProperties(_encoder, (__bridge CFDictionaryRef)properties) != noErr)
         fail(@"H.264 low-latency configuration failed.");
-    VTCompressionSessionPrepareToEncodeFrames(_encoder);
+    if (VTCompressionSessionPrepareToEncodeFrames(_encoder)!=noErr)
+        fail(@"The native H.264 encoder could not prepare for capture.");
     SCStreamConfiguration *config = [SCStreamConfiguration new];
     config.width = self.width; config.height = self.height;
     config.minimumFrameInterval = CMTimeMake(1,30);
@@ -251,6 +271,7 @@ static void compressed(void *ref, void *, OSStatus status, VTEncodeInfoFlags, CM
         }
     }
     CMBlockBufferRef buffer = CMSampleBufferGetDataBuffer(sample);
+    if (!buffer) return;
     size_t size = CMBlockBufferGetDataLength(buffer);
     if (size > 8*1024*1024-1024) return;
     NSMutableData *avcc = [NSMutableData dataWithLength:size];
@@ -280,6 +301,14 @@ static void compressed(void *ref, void *, OSStatus status, VTEncodeInfoFlags, CM
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         signal(SIGPIPE,SIG_IGN);
+        watchParent();
+        if (argc==2 && !strcmp(argv[1],"self-test-parent")) {
+            // No display enumeration, permissions, capture or creation. Used
+            // only to verify process ownership on headless macOS CI.
+            record(1,[NSJSONSerialization dataWithJSONObject:@{@"pid":@(getpid()),@"parent":@(getppid()),@"mode":@"parent-watch"} options:0 error:nil]);
+            [[NSRunLoop mainRunLoop] run];
+            return 0;
+        }
         if (argc==2 && !strcmp(argv[1],"list-displays")) {
             NSData *data=[NSJSONSerialization dataWithJSONObject:@{@"displays":displayDictionaries(readTopology())} options:0 error:nil];
             if (data.length>4096) fail(@"Too many displays for this development version's layout controls.");
@@ -310,17 +339,29 @@ int main(int argc, const char *argv[]) {
             fail(@"Screen Recording permission is required. Grant it to LinkDesk and relaunch.");
         CGDirectDisplayID target = extending ? createVirtualDisplay(anchor,side,placement) : CGMainDisplayID();
         // The display server can need a moment before exposing a newly attached display.
-        for (int attempt=0;attempt<20;attempt++) {
+        const auto startupDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        for (int attempt=0;attempt<20 && std::chrono::steady_clock::now()<startupDeadline;attempt++) {
             __block bool done = false;
+            __block bool expired = false;
+            __block bool queryFailed = false;
             __block SCDisplay *selected = nil;
             [SCShareableContent getShareableContentExcludingDesktopWindows:NO onScreenWindowsOnly:NO
                 completionHandler:^(SCShareableContent *content,NSError *error) {
-                    for (SCDisplay *display in content.displays) if (display.displayID==target) selected=display;
-                    done=true;
+                    // Shareable-content callbacks may arrive on another queue.
+                    // Only the main queue accesses this attempt's mutable state.
+                    dispatch_async(dispatch_get_main_queue(),^{
+                        if (expired) return;
+                        queryFailed=error!=nil;
+                        for (SCDisplay *display in content.displays) if (display.displayID==target) selected=display;
+                        done=true;
+                    });
                 }];
-            NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3];
-            while (!done && deadline.timeIntervalSinceNow>0)
+            const auto deadline=std::min(startupDeadline,std::chrono::steady_clock::now()+std::chrono::seconds(3));
+            while (!done && std::chrono::steady_clock::now()<deadline)
                 [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+            expired=true;
+            if (!done) fail(@"Screen capture enumeration timed out. LinkDesk ended its own extension; check permission and retry.");
+            if (queryFailed) fail(@"Screen capture enumeration failed. Check Screen Recording permission and relaunch LinkDesk.");
             if (selected) {
                 LinkDeskCapture *capture = [LinkDeskCapture new];captureOwner=capture;
                 [capture begin:selected];

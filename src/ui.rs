@@ -440,7 +440,7 @@ impl LinkDesk {
                         .size(12.),
                 );
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.label(RichText::new("0.1.0 Alpha 3").color(MUTED).size(11.));
+                    ui.label(RichText::new("0.1.0 Alpha 4").color(MUTED).size(11.));
                     ui.label(
                         RichText::new("Mac 扩展屏仍为实验功能")
                             .color(MUTED)
