@@ -125,6 +125,82 @@ pub struct LiveLayout {
     pub existing_preserved: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Passage {
+    pub side: Side,
+    pub length: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteState {
+    Connected(Passage),
+    AnchorUnavailable,
+    ReceiverMissing,
+    ReceiverUnavailable,
+    Overlapping,
+    NoSharedEdge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutCheck {
+    pub state: RouteState,
+    pub existing_changed: bool,
+    pub receiver_rect: Option<Rect>,
+}
+
+/// Read-only assessment. Never turn a missing screen into a cached rectangle,
+/// restore an old layout, or silently select a different anchor.
+pub fn check_current(layout: &LiveLayout, current: &[Display]) -> Result<LayoutCheck> {
+    validate_displays(current)?;
+    ensure!(
+        layout.display_id != 0 && layout.display_id != layout.placement.anchor_id,
+        "原始扩展屏标识无效，请结束共享后重新规划。"
+    );
+    let mut before = layout.existing.clone();
+    let mut now: Vec<_> = current
+        .iter()
+        .filter(|d| d.id != layout.display_id)
+        .cloned()
+        .collect();
+    before.sort_by_key(|d| d.id);
+    now.sort_by_key(|d| d.id);
+    let receiver = current.iter().find(|d| d.id == layout.display_id);
+    let mut result = LayoutCheck {
+        state: RouteState::ReceiverMissing,
+        existing_changed: before != now,
+        receiver_rect: receiver.map(|d| d.rect),
+    };
+    let Some(receiver) = receiver else {
+        return Ok(result);
+    };
+    if !receiver.can_anchor() {
+        result.state = RouteState::ReceiverUnavailable;
+        return Ok(result);
+    }
+    let Some(anchor) = current
+        .iter()
+        .find(|d| d.id == layout.placement.anchor_id && d.can_anchor())
+    else {
+        result.state = RouteState::AnchorUnavailable;
+        return Ok(result);
+    };
+    if current
+        .iter()
+        .any(|d| d.id != receiver.id && d.can_anchor() && receiver.rect.intersects(d.rect))
+    {
+        result.state = RouteState::Overlapping;
+        return Ok(result);
+    }
+    result.state = [Side::Right, Side::Left, Side::Above, Side::Below]
+        .into_iter()
+        .filter_map(|side| shared_edge(receiver.rect, anchor.rect, side))
+        .filter(|p| p.length >= MIN_PASSAGE)
+        .max_by_key(|p| p.length)
+        .map(RouteState::Connected)
+        .unwrap_or(RouteState::NoSharedEdge);
+    Ok(result)
+}
+
 pub fn validate_displays(displays: &[Display]) -> Result<()> {
     ensure!(
         !displays.is_empty() && displays.len() <= 64,
@@ -145,15 +221,23 @@ pub fn validate_displays(displays: &[Display]) -> Result<()> {
 }
 
 pub fn adjacent(rect: Rect, anchor: Rect, side: Side) -> bool {
+    shared_edge(rect, anchor, side).is_some_and(|p| p.length >= MIN_PASSAGE)
+}
+
+pub fn shared_edge(rect: Rect, anchor: Rect, side: Side) -> Option<Passage> {
+    if !rect.valid() || !anchor.valid() {
+        return None;
+    }
     let vertical = rect.bottom().min(anchor.bottom()) - rect.y.max(anchor.y);
     let horizontal = rect.right().min(anchor.right()) - rect.x.max(anchor.x);
-    match side {
-        Side::Right => rect.x == anchor.right() && vertical >= MIN_PASSAGE,
-        Side::Left => rect.right() == anchor.x && vertical >= MIN_PASSAGE,
-        Side::Above => rect.bottom() == anchor.y && horizontal >= MIN_PASSAGE,
-        Side::Below => rect.y == anchor.bottom() && horizontal >= MIN_PASSAGE,
-        Side::Auto => false,
-    }
+    let length = match side {
+        Side::Right if rect.x == anchor.right() => vertical,
+        Side::Left if rect.right() == anchor.x => vertical,
+        Side::Above if rect.bottom() == anchor.y => horizontal,
+        Side::Below if rect.y == anchor.bottom() => horizontal,
+        _ => return None,
+    };
+    (length > 0).then_some(Passage { side, length })
 }
 
 pub fn validate_placement(displays: &[Display], placement: Placement) -> Result<()> {
@@ -417,5 +501,139 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn running() -> (LiveLayout, Vec<Display>) {
+        let existing = vec![
+            screen(1, 0, 0, 1728, 1117),
+            screen(2, 300, -1024, 1366, 1024),
+        ];
+        let placement = plan(
+            &existing,
+            ExtensionOptions {
+                anchor: Some(2),
+                side: Side::Right,
+            },
+        )
+        .unwrap();
+        let mut current = existing.clone();
+        current.push(Display {
+            id: 3,
+            rect: placement.rect,
+            main: false,
+            active: true,
+            mirrored_to: 0,
+        });
+        (
+            LiveLayout {
+                display_id: 3,
+                placement,
+                existing,
+                existing_preserved: true,
+            },
+            current,
+        )
+    }
+    #[test]
+    fn current_check_uses_actual_geometry_and_does_not_change_any_screen() {
+        let (layout, current) = running();
+        let before = current.clone();
+        let check = check_current(&layout, &current).unwrap();
+        assert_eq!(
+            check.state,
+            RouteState::Connected(Passage {
+                side: Side::Right,
+                length: 1024
+            })
+        );
+        assert!(!check.existing_changed);
+        assert_eq!(current, before);
+        assert!(!adjacent(
+            Rect {
+                x: i64::MAX,
+                y: 0,
+                width: 1920,
+                height: 1080
+            },
+            current[1].rect,
+            Side::Right
+        ));
+    }
+    #[test]
+    fn moving_sidecar_away_invalidates_the_old_startup_passage() {
+        let (layout, mut current) = running();
+        current[1].rect.x = -2000;
+        let check = check_current(&layout, &current).unwrap();
+        assert_eq!(check.state, RouteState::NoSharedEdge);
+        assert!(check.existing_changed);
+    }
+    #[test]
+    fn user_rearranged_receiver_can_have_a_different_valid_side() {
+        let (layout, mut current) = running();
+        current[2].rect = Rect {
+            x: 300,
+            y: -2104,
+            width: 1920,
+            height: 1080,
+        };
+        let check = check_current(&layout, &current).unwrap();
+        assert_eq!(
+            check.state,
+            RouteState::Connected(Passage {
+                side: Side::Above,
+                length: 1366
+            })
+        );
+        assert_eq!(check.receiver_rect, Some(current[2].rect));
+    }
+    #[test]
+    fn missing_or_mirrored_anchor_does_not_silently_fall_back_to_main() {
+        let (layout, mut current) = running();
+        current.retain(|d| d.id != 2);
+        assert_eq!(
+            check_current(&layout, &current).unwrap().state,
+            RouteState::AnchorUnavailable
+        );
+        let (layout, mut current) = running();
+        current[1].mirrored_to = 1;
+        assert_eq!(
+            check_current(&layout, &current).unwrap().state,
+            RouteState::AnchorUnavailable
+        );
+    }
+    #[test]
+    fn missing_mirrored_or_overlapping_receiver_has_no_green_passage() {
+        let (layout, mut current) = running();
+        current.retain(|d| d.id != 3);
+        assert_eq!(
+            check_current(&layout, &current).unwrap().state,
+            RouteState::ReceiverMissing
+        );
+        let (layout, mut current) = running();
+        current[2].mirrored_to = 1;
+        assert_eq!(
+            check_current(&layout, &current).unwrap().state,
+            RouteState::ReceiverUnavailable
+        );
+        let (layout, mut current) = running();
+        current.push(screen(4, current[2].rect.x, current[2].rect.y, 100, 100));
+        assert_eq!(
+            check_current(&layout, &current).unwrap().state,
+            RouteState::Overlapping
+        );
+    }
+    #[test]
+    fn reordered_lists_are_stable_and_corner_only_contact_is_not_a_route() {
+        let (layout, mut current) = running();
+        current.reverse();
+        assert!(!check_current(&layout, &current).unwrap().existing_changed);
+        let anchor = current.iter().find(|d| d.id == 2).unwrap().rect;
+        current.iter_mut().find(|d| d.id == 3).unwrap().rect.y = anchor.bottom();
+        assert!(!matches!(
+            check_current(&layout, &current).unwrap().state,
+            RouteState::Connected(_)
+        ));
+        current.push(current[0].clone());
+        assert!(check_current(&layout, &current).is_err());
     }
 }

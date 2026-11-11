@@ -440,7 +440,7 @@ impl LinkDesk {
                         .size(12.),
                 );
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.label(RichText::new("0.1.0 Alpha 4").color(MUTED).size(11.));
+                    ui.label(RichText::new("0.1.0 Alpha 5").color(MUTED).size(11.));
                     ui.label(
                         RichText::new("Mac 扩展屏仍为实验功能")
                             .color(MUTED)
@@ -798,7 +798,7 @@ impl LinkDesk {
                             "诊断仅使用合成画面，不采集桌面、不向局域网开放。"
                         });
                         if self.layout_preview {
-                            self.desktop.show_setup(ui, ctx);
+                            self.desktop.show_preview(ui, ctx);
                         }
                         ui.add_space(20.);
                         if ui.button("退出诊断，设置共享").clicked() {
@@ -934,7 +934,7 @@ impl LinkDesk {
             });
         });
         if self.mode == Mode::Extend {
-            self.desktop.show_live(ui);
+            self.desktop.show_live(ui, ctx);
         }
         if !self.requests.is_empty() {
             ui.add_space(20.);
