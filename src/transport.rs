@@ -80,7 +80,9 @@ impl Control {
         if let Some(socket) = active.socket.take() {
             let _ = socket.shutdown(std::net::Shutdown::Both);
         }
-        if let Some(wake) = active.wake.take() {
+        // Keep the readiness source alive until the poll owner drops WakeLease.
+        // Closing Linux's eventfd here can remove an unread wake from epoll.
+        if let Some(wake) = active.wake.as_ref() {
             let _ = wake.wake();
         }
     }
