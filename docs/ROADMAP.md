@@ -21,6 +21,7 @@ Acceptance: macOS Displays shows an independent LinkDesk display; three screens 
 - [x] Chinese native connection flow, retry after failure and in-memory fingerprint confirmation cache.
 - [x] Host controls for disconnecting a specific receiver; bounded discovery and control messages.
 - [x] On-demand, read-only current-layout and shared-edge checks during Mac sharing; distinguish startup reference from current observations.
+- [x] Cancel name resolution / connection / both TLS setup phases, stage-specific retry guidance, and an absolute first-frame deadline that permits static desktops after startup.
 - [ ] Saved device identities and revocable device trust, backed by OS credential stores.
 - [ ] One-click reconnect and tray/menu bar controls.
 - [ ] Receiver resolution/DPI/rotation negotiation and Retina/HiDPI modes.

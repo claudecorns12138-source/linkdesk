@@ -33,6 +33,10 @@ Windows extension needs a separate user-mode indirect display driver. There is n
 
 This MVP uses a single TCP stream per receiver. Packet loss causes head-of-line blocking; it is not a guarantee of Sidecar latency. QUIC/datagram transport, hardware decoding, adaptive rate/resolution, and separate cursor transport are later work.
 
+Receiver setup uses Mio nonblocking readiness and a cancellation waker. Name resolution, the aggregate address-candidate connection budget and each TLS handshake have monotonic limits of 5, 5 and 8 seconds respectively. Cancel closes the registered socket and wakes readiness polling during both the certificate probe and the pinned reconnect. The probe's scope closes its socket before asking for fingerprint confirmation. A single system resolver worker has a four-request queue; canceled or expired queued lookups are skipped. An already running OS lookup cannot be forcibly interrupted, but the receiver stops waiting within its cancellation polling interval (50 ms) and no extra resolver thread is started. Numeric addresses bypass that worker.
+
+After approval, a cancelable watchdog limits the total wait for the first validated, decoded frame to 15 seconds, including partial or undecodable records. A per-read timeout is not the only deadline. The first valid decode cancels the watchdog and clears the timeout on the actual reading socket; cloning a socket is used only for shutdown. There is no fixed idle video timeout afterward, so a static desktop may stay silent. TCP keepalive detects some broken links; it does not promise a fixed recovery time. Typed setup errors preserve the failure stage for native UI guidance, and intentional cancellation produces no failure notification.
+
 Records: big-endian u32 length (including kind byte), u8 kind, payload. Kind 1 is bounded JSON control, 2 is video, and 3 is a normalized capture error. Video payload: u64 sequence, u32 width, u32 height, u8 keyframe, Annex B bytes. Maximum record: 8 MiB; maximum advertised dimensions: 4096×2160; current capture target: ≤1920×1080.
 
 No unbounded frame queue exists. Receivers render only the latest decoded frame. A host caches at most one bounded GOP for joining a static screen. A full receiver channel closes that stream rather than dropping a referenced inter-frame and continuing with corruption.
@@ -51,3 +55,4 @@ Alpha 5 adds a host-local, user-triggered topology query while sharing. The resu
 - [Microsoft indirect display driver model](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/indirect-display-driver-model-overview)
 - [eframe native entry point](https://docs.rs/eframe/0.31.1/eframe/fn.run_native.html)
 - [OpenH264 Rust wrapper](https://docs.rs/openh264/0.9.9/openh264/)
+- [Mio readiness polling](https://docs.rs/mio/1.2.4/mio/struct.Poll.html)

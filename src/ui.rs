@@ -347,13 +347,27 @@ impl LinkDesk {
                         });
                     }
                 }
-                Event::ReceiverFinished { error } => {
+                Event::ReceiverFinished { error, stage } => {
                     let streamed = self.frames > 0;
                     self.stop_receiver();
                     if self.fullscreen {
                         self.leave_fullscreen(ctx);
                     }
-                    self.notice=Some(Notice{title:if streamed{"连接已断开"}else{"连接未完成"}.into(),hint:if streamed{"主机可能已结束共享或网络发生变化。确认主机仍在共享后，点击重新连接。"}else{"请检查主机地址、配对码是否过期，并在主机上允许本次连接。热点隔离或防火墙也可能阻止连接。"}.into(),detail:error.unwrap_or_default()});
+                    self.notice = Some(Notice {
+                        title: if streamed {
+                            "连接已断开"
+                        } else {
+                            stage.title()
+                        }
+                        .into(),
+                        hint: if streamed {
+                            "主机可能已结束共享或网络发生变化。确认主机仍在共享后，点击重新连接。"
+                        } else {
+                            stage.hint()
+                        }
+                        .into(),
+                        detail: error.unwrap_or_default(),
+                    });
                 }
                 _ => {}
             }
@@ -440,7 +454,7 @@ impl LinkDesk {
                         .size(12.),
                 );
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.label(RichText::new("0.1.0 Alpha 5").color(MUTED).size(11.));
+                    ui.label(RichText::new("0.1.0 Alpha 6").color(MUTED).size(11.));
                     ui.label(
                         RichText::new("Mac 扩展屏仍为实验功能")
                             .color(MUTED)
