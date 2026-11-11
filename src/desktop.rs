@@ -184,10 +184,12 @@ pub fn check_current(layout: &LiveLayout, current: &[Display]) -> Result<LayoutC
         result.state = RouteState::AnchorUnavailable;
         return Ok(result);
     };
-    if current
-        .iter()
-        .any(|d| d.id != receiver.id && d.can_anchor() && receiver.rect.intersects(d.rect))
-    {
+    if current.iter().enumerate().any(|(i, a)| {
+        a.can_anchor()
+            && current[i + 1..]
+                .iter()
+                .any(|b| b.can_anchor() && a.rect.intersects(b.rect))
+    }) {
         result.state = RouteState::Overlapping;
         return Ok(result);
     }
@@ -617,6 +619,15 @@ mod tests {
         );
         let (layout, mut current) = running();
         current.push(screen(4, current[2].rect.x, current[2].rect.y, 100, 100));
+        assert_eq!(
+            check_current(&layout, &current).unwrap().state,
+            RouteState::Overlapping
+        );
+    }
+    #[test]
+    fn overlapping_existing_anchor_also_invalidates_the_route() {
+        let (layout, mut current) = running();
+        current.push(screen(4, 300, -1024, 100, 100));
         assert_eq!(
             check_current(&layout, &current).unwrap().state,
             RouteState::Overlapping
