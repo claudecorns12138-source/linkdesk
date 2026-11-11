@@ -8,7 +8,7 @@ Native desktop applications, not a browser viewer or a WebView. Written in Rust,
 
 **Development downloads:** [macOS and Windows alpha packages](https://github.com/claudecorns12138-source/linkdesk/releases). These are native applications built in CI, not browser clients. Follow the pairing instructions below; real Mac extension and Sidecar coexistence remain unverified.
 
-当前下载：[Alpha 5 的 Mac ARM64 与 Windows x64 安装包](https://github.com/claudecorns12138-source/linkdesk/releases/tag/v0.1.0-alpha.5)，均通过三平台 CI 检查后发布。网络协议与接收流程保持兼容，已有 Windows Alpha 2 接收端也可继续使用。真实 Mac + iPad 随航 + Windows 的共存与双向窗口拖动仍待实机验收。
+当前下载：[Alpha 6 的 Mac ARM64 与 Windows x64 安装包](https://github.com/claudecorns12138-source/linkdesk/releases/tag/v0.1.0-alpha.6)，均通过三平台 CI 检查后发布。网络协议保持兼容，已有 Windows Alpha 2 接收端也可继续使用；更新接收端可获得连接取消与首帧期限改进。真实 Mac + iPad 随航 + Windows 的共存与双向窗口拖动仍待实机验收。
 
 ## Alpha 6：取消连接与等待首帧
 
